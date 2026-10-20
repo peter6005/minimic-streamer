@@ -312,7 +312,7 @@ Beacon payload (32 bytes):
 | 1 | Low 2 bits: receiver-specific (seen `01`, `03`). After pairing the upper bits come from reply byte 1 (`0x35` → `0x35`/`0x37`) |
 | 2 | RF channel this beacon is sent on |
 | 3 | `0x1E` normal beacon, `0x16` confirmation right after a pairing |
-| 4, 5 | `03 00` |
+| 4, 5 | `03 00` on N8 receivers; `03 06` on N6 receivers. Byte 5 marks the generation(?) and selects the reply's bytes 4, 5 (below) |
 | 6 | `00`, after pairing the value of reply byte 4 (`0x93`) |
 | 7 | `0x1A` normal, `0x12` in a confirmation |
 | 8..11 | Receiver ID, which is also the receiver's own radio address |
@@ -336,7 +336,7 @@ bytes 8..11), on the channel the beacon came on, with CONFIG `0x7E` (transmit):
 | 0 | New pairing session number. The original microphone counts `0x30`, `0x50`, `0x70`, ... It must differ from beacon byte 0. |
 | 1 | `0x35` |
 | 2, 3 | `00 00` |
-| 4, 5 | `93 14` |
+| 4, 5 | `93 14` for a receiver whose beacon byte 5 is `00` (N8). `92 08` when beacon byte 5 is `06` (N6). Wrong values here are silently rejected and pairing never confirms |
 | 6..15 | The receiver's serial number (copied from beacon bytes 12..21) |
 | 16..19 | The transmitter's address (as written to TX_ADDR) |
 | 20..23 | `00` |
@@ -349,7 +349,16 @@ lost, the receiver keeps asking, and the transmitter simply replies to the next 
 
 ### Confirmation
 
-The receiver then sends confirmation beacons (byte 3 = `0x16`) that contain the transmitter address
-in bytes 22..25. Its normal beacons from then on carry the new session number in byte 0 and `0x4B` in
-byte 29. The transmitter returns to its normal audio stream (section 1), and the receiver plays it.
+The receiver then sends confirmation beacons (byte 3 = `0x16`) with byte 29's `0x08` bit set (paired).
+Its normal beacons from then on carry the new session number in byte 0 and the paired bit in byte 29.
+The transmitter returns to its normal audio stream (section 1), and the receiver plays it.
+
+How the receiver marks *which* transmitter it accepted differs by generation:
+
+- **N8** (beacon byte 5 = `00`) echo the accepted transmitter address in bytes 22..25.
+- **N6** (beacon byte 5 = `06`) leave bytes 22..25 as `00` and only set the paired bit.
+
+So a transmitter should treat a `0x16` beacon with the paired bit set, from a receiver it has just
+replied to, as the confirmation — rather than matching on the echoed address, which only the newer
+receivers provide.
 

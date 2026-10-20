@@ -66,7 +66,10 @@ static bool in_list(uint8_t list[][4], int n, const uint8_t *id) {
 static void send_reply(const uint8_t *b, uint8_t ch) {
     uint8_t r[32] = {0};
     r[0] = (uint8_t)(((b[0] & 0xF0) + 0x20) | 0x10);     // new pairing session number
-    r[1] = 0x35; r[4] = 0x93; r[5] = 0x14;
+    r[1] = 0x35;
+    // Reply bytes 4,5 depend on the receiver generation(?), which it announces in beacon byte 5:
+    // 0x00 = N8 (reply 93 14), 0x06 = N6 (reply 92 08). See CODEC.md section 9.
+    if (b[5] == 0x06) { r[4] = 0x92; r[5] = 0x08; } else { r[4] = 0x93; r[5] = 0x14; }
     memcpy(r + 6, b + 12, 10);                           // echo the receiver's own serial number
     memcpy(r + 16, my_addr, 4);                          // our address
     r[24] = 0x04; r[25] = 0x08; r[26] = 0x05;
@@ -78,7 +81,7 @@ static void send_reply(const uint8_t *b, uint8_t ch) {
 }
 
 static void pair_run(void) {
-    static uint8_t done[16][4]; int ndone = 0;
+    static uint8_t done[16][4], replied[16][4]; int ndone = 0, nreplied = 0;
     pair_state = RADIO_PAIR_SEARCH; pair_beacons = 0; pair_count = 0;
     uint64_t t_end = time_us_64() + PAIR_WINDOW_US; int ci = 0;
     while (time_us_64() < t_end && pair_req != 2) {
@@ -90,13 +93,19 @@ static void pair_run(void) {
             uint8_t b[32]; nrf_read_payload(b); nrf_wreg1(NRF_REG_STATUS, 0x70);
             if (!((b[3] == 0x1E || b[3] == 0x16) && b[4] == 0x03)) continue;   // not a receiver beacon
             pair_beacons++; memcpy(last_beacon, b, 32); beacon_seq++;
-            if (b[3] == 0x16 && memcmp(b + 22, my_addr, 4) == 0) {             // confirmation of our address
+            // Confirmation: a 0x16 beacon with the paired bit set, from a receiver we just replied to.
+            // N8 also echo our address in bytes 22..25; N6 leaves them zero, so we key off the reply
+            // list and the paired bit instead of the address. See CODEC.md section 9.
+            bool confirm = b[3] == 0x16 && (b[29] & 0x08) &&
+                           (in_list(replied, nreplied, b + 8) || memcmp(b + 22, my_addr, 4) == 0);
+            if (confirm) {
                 if (!in_list(done, ndone, b + 8)) {
                     if (ndone < 16) memcpy(done[ndone++], b + 8, 4);
                     memcpy(paired_id, b + 8, 4); pair_count++;
                 }
             } else if ((b[28] & 0x80) && !(b[29] & 0x08) && !in_list(done, ndone, b + 8)) {
                 send_reply(b, ch); nrf_setup_rx(ch, BEACON_ADDR);
+                if (!in_list(replied, nreplied, b + 8) && nreplied < 16) memcpy(replied[nreplied++], b + 8, 4);
             }
         }
     }
