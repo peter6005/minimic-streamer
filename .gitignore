@@ -1,3 +1,4 @@
+.vscode/
 # build output (build_all.sh and manual CMake builds)
 dist/
 firmware/build*/
